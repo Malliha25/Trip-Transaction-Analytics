@@ -1,0 +1,9 @@
+{
+  "name": "DS_Watermark_Control",
+  "type": "Microsoft.DataFactory/factories/datasets",
+  "properties": {
+    "type": "SqlServerTable",
+    "linkedServiceName": { "referenceName": "LS_SqlServer_ControlDB", "type": "LinkedServiceReference" },
+    "typeProperties": { "schema": "ctl", "table": "WatermarkControl" }
+  }
+}

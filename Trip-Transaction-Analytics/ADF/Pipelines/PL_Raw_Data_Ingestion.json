@@ -1,0 +1,140 @@
+{
+  "name": "PL_Raw_Data_Ingestion",
+  "type": "Microsoft.DataFactory/factories/pipelines",
+  "properties": {
+    "description": "Extracts a single source table from TripOpsDB into the Bronze layer (ADLS Gen2), validates row counts, then writes a pipeline audit record.",
+    "parameters": {
+      "SourceTableName": { "type": "string", "defaultValue": "Trips" },
+      "SourceSchemaName": { "type": "string", "defaultValue": "dbo" }
+    },
+    "variables": {
+      "LoadDate": { "type": "String" },
+      "SourceRowCount": { "type": "String" },
+      "SinkRowCount": { "type": "String" }
+    },
+    "activities": [
+      {
+        "name": "Set LoadDate",
+        "type": "SetVariable",
+        "typeProperties": { "variableName": "LoadDate", "value": "@formatDateTime(utcnow(),'yyyy-MM-dd')" }
+      },
+      {
+        "name": "Lookup Watermark",
+        "type": "Lookup",
+        "dependsOn": [ { "activity": "Set LoadDate", "dependencyConditions": ["Succeeded"] } ],
+        "typeProperties": {
+          "source": {
+            "type": "SqlServerSource",
+            "sqlReaderQuery": "SELECT LastWatermarkValue FROM ctl.WatermarkControl WHERE SourceTable = '@{pipeline().parameters.SourceTableName}' AND IsActive = 1"
+          },
+          "dataset": { "referenceName": "DS_Watermark_Control", "type": "DatasetReference" }
+        }
+      },
+      {
+        "name": "Lookup Source Row Count",
+        "type": "Lookup",
+        "dependsOn": [ { "activity": "Lookup Watermark", "dependencyConditions": ["Succeeded"] } ],
+        "typeProperties": {
+          "source": {
+            "type": "SqlServerSource",
+            "sqlReaderQuery": "SELECT COUNT(*) AS RowCount FROM [@{pipeline().parameters.SourceSchemaName}].[@{pipeline().parameters.SourceTableName}] WHERE ModifiedDate > '@{activity('Lookup Watermark').output.firstRow.LastWatermarkValue}'"
+          },
+          "dataset": {
+            "referenceName": "DS_SqlServer_Source",
+            "type": "DatasetReference",
+            "parameters": { "SchemaName": "@pipeline().parameters.SourceSchemaName", "TableName": "@pipeline().parameters.SourceTableName" }
+          }
+        }
+      },
+      {
+        "name": "Copy Source To Bronze",
+        "type": "Copy",
+        "dependsOn": [ { "activity": "Lookup Source Row Count", "dependencyConditions": ["Succeeded"] } ],
+        "policy": { "retry": 3, "retryIntervalInSeconds": 30, "timeout": "02:00:00" },
+        "typeProperties": {
+          "source": {
+            "type": "SqlServerSource",
+            "sqlReaderQuery": "SELECT * FROM [@{pipeline().parameters.SourceSchemaName}].[@{pipeline().parameters.SourceTableName}] WHERE ModifiedDate > '@{activity('Lookup Watermark').output.firstRow.LastWatermarkValue}'"
+          },
+          "sink": {
+            "type": "ParquetSink",
+            "storeSettings": { "type": "AzureBlobFSWriteSettings" }
+          },
+          "enableStaging": true,
+          "stagingSettings": {
+            "linkedServiceName": { "referenceName": "LS_ADLSGen2", "type": "LinkedServiceReference" },
+            "path": "staging/trip-analytics"
+          },
+          "parallelCopies": 4,
+          "dataIntegrationUnits": 8
+        },
+        "inputs": [
+          {
+            "referenceName": "DS_SqlServer_Source", "type": "DatasetReference",
+            "parameters": { "SchemaName": "@pipeline().parameters.SourceSchemaName", "TableName": "@pipeline().parameters.SourceTableName" }
+          }
+        ],
+        "outputs": [
+          {
+            "referenceName": "DS_Bronze_Parquet", "type": "DatasetReference",
+            "parameters": { "TableName": "@pipeline().parameters.SourceTableName", "LoadDate": "@variables('LoadDate')" }
+          }
+        ]
+      },
+      {
+        "name": "MDF Validate Bronze Row Count",
+        "type": "ExecuteDataFlow",
+        "description": "Mapping Data Flow that recomputes the row count landed in Bronze and schema-validates required columns are non-null.",
+        "dependsOn": [ { "activity": "Copy Source To Bronze", "dependencyConditions": ["Succeeded"] } ],
+        "typeProperties": {
+          "dataflow": { "referenceName": "DF_Validate_Bronze_Ingestion", "type": "DataFlowReference" },
+          "compute": { "coreCount": 8, "computeType": "General" },
+          "traceLevel": "Fine"
+        }
+      },
+      {
+        "name": "If Validation Failed",
+        "type": "IfCondition",
+        "dependsOn": [ { "activity": "MDF Validate Bronze Row Count", "dependencyConditions": ["Succeeded"] } ],
+        "typeProperties": {
+          "expression": { "value": "@not(equals(activity('Lookup Source Row Count').output.firstRow.RowCount, activity('MDF Validate Bronze Row Count').output.runStatus.metrics.rowsWritten))", "type": "Expression" },
+          "ifTrueActivities": [
+            {
+              "name": "Fail Row Count Mismatch",
+              "type": "Fail",
+              "typeProperties": {
+                "message": "Row count mismatch between source and Bronze for @{pipeline().parameters.SourceTableName}",
+                "errorCode": "BRONZE_ROWCOUNT_MISMATCH"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "Update Watermark",
+        "type": "Lookup",
+        "dependsOn": [ { "activity": "If Validation Failed", "dependencyConditions": ["Succeeded"] } ],
+        "typeProperties": {
+          "source": {
+            "type": "SqlServerSource",
+            "sqlReaderQuery": "UPDATE ctl.WatermarkControl SET LastWatermarkValue = SYSUTCDATETIME(), LastRunID = '@{pipeline().RunId}', LastLoadStatus = 'Success', LastUpdatedDate = SYSUTCDATETIME() WHERE SourceTable = '@{pipeline().parameters.SourceTableName}'; SELECT 1 AS Result;"
+          },
+          "dataset": { "referenceName": "DS_Watermark_Control", "type": "DatasetReference" }
+        }
+      },
+      {
+        "name": "Write Pipeline Audit Success",
+        "type": "Lookup",
+        "dependsOn": [ { "activity": "Update Watermark", "dependencyConditions": ["Succeeded"] } ],
+        "typeProperties": {
+          "source": {
+            "type": "SqlServerSource",
+            "sqlReaderQuery": "INSERT INTO ctl.PipelineAudit (PipelineName, RunID, TriggerType, SourceTable, StartTime, EndTime, Status, RecordsRead, RecordsWritten) VALUES ('PL_Raw_Data_Ingestion','@{pipeline().RunId}','@{pipeline().TriggerType}','@{pipeline().parameters.SourceTableName}','@{pipeline().TriggerTime}',SYSUTCDATETIME(),'Succeeded',@{activity('Lookup Source Row Count').output.firstRow.RowCount},@{activity('Lookup Source Row Count').output.firstRow.RowCount}); SELECT 1 AS Result;"
+          },
+          "dataset": { "referenceName": "DS_Watermark_Control", "type": "DatasetReference" }
+        }
+      }
+    ],
+    "annotations": ["Layer:Bronze", "Owner:DataEngineering"]
+  }
+}

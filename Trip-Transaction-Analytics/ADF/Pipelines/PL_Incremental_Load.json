@@ -1,0 +1,49 @@
+{
+  "name": "PL_Incremental_Load",
+  "type": "Microsoft.DataFactory/factories/pipelines",
+  "properties": {
+    "description": "Metadata-driven incremental load. Reads the active watermark table list and fans out PL_Raw_Data_Ingestion for every source table in parallel (ForEach), implementing the watermark + change-tracking pattern.",
+    "activities": [
+      {
+        "name": "Lookup Active Tables",
+        "type": "Lookup",
+        "typeProperties": {
+          "source": {
+            "type": "SqlServerSource",
+            "sqlReaderQuery": "SELECT SourceSchema, SourceTable FROM ctl.WatermarkControl WHERE IsActive = 1"
+          },
+          "dataset": { "referenceName": "DS_Watermark_Control", "type": "DatasetReference" },
+          "firstRowOnly": false
+        }
+      },
+      {
+        "name": "ForEach Source Table",
+        "type": "ForEach",
+        "dependsOn": [ { "activity": "Lookup Active Tables", "dependencyConditions": ["Succeeded"] } ],
+        "typeProperties": {
+          "items": { "value": "@activity('Lookup Active Tables').output.value", "type": "Expression" },
+          "isSequential": false,
+          "batchCount": 5,
+          "activities": [
+            {
+              "name": "Execute PL_Raw_Data_Ingestion",
+              "type": "ExecutePipeline",
+              "typeProperties": {
+                "pipeline": { "referenceName": "PL_Raw_Data_Ingestion", "type": "PipelineReference" },
+                "waitOnCompletion": true,
+                "parameters": {
+                  "SourceSchemaName": "@item().SourceSchema",
+                  "SourceTableName": "@item().SourceTable"
+                }
+              },
+              "policy": { "retry": 2, "retryIntervalInSeconds": 60, "secureInput": false, "secureOutput": false }
+            }
+          ]
+        }
+      }
+    ],
+    "annotations": ["Pattern:MetadataDriven-Watermark", "Layer:Bronze"],
+
+    "_change_tracking_note": "For sources with SQL Server Change Tracking enabled, replace the ModifiedDate predicate in PL_Raw_Data_Ingestion's source query with: SELECT t.*, ct.SYS_CHANGE_OPERATION FROM dbo.Trips t JOIN CHANGETABLE(CHANGES dbo.Trips, @{activity('Lookup Watermark').output.firstRow.LastWatermarkValue}) ct ON t.TripID = ct.TripID  -- this captures I/U/D operations for true CDC semantics instead of a ModifiedDate delta."
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "DS_Bronze_Parquet",
+  "type": "Microsoft.DataFactory/factories/datasets",
+  "properties": {
+    "type": "Parquet",
+    "linkedServiceName": { "referenceName": "LS_ADLSGen2", "type": "LinkedServiceReference" },
+    "parameters": {
+      "TableName": { "type": "String" },
+      "LoadDate": { "type": "String" }
+    },
+    "typeProperties": {
+      "location": {
+        "type": "AzureBlobFSLocation",
+        "fileSystem": "bronze",
+        "folderPath": "trip-analytics/@{dataset().TableName}/loaddate=@{dataset().LoadDate}"
+      },
+      "compressionCodec": "snappy"
+    },
+    "schema": []
+  }
+}

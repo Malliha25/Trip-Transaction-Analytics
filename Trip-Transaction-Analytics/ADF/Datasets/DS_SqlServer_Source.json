@@ -1,0 +1,16 @@
+{
+  "name": "DS_SqlServer_Source",
+  "type": "Microsoft.DataFactory/factories/datasets",
+  "properties": {
+    "type": "SqlServerTable",
+    "linkedServiceName": { "referenceName": "LS_SqlServer_OnPrem", "type": "LinkedServiceReference" },
+    "parameters": {
+      "SchemaName": { "type": "String", "defaultValue": "dbo" },
+      "TableName": { "type": "String" }
+    },
+    "typeProperties": {
+      "schema": "@dataset().SchemaName",
+      "table": "@dataset().TableName"
+    }
+  }
+}

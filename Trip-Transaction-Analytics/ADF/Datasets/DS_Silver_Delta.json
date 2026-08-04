@@ -1,0 +1,16 @@
+{
+  "name": "DS_Silver_Delta",
+  "type": "Microsoft.DataFactory/factories/datasets",
+  "properties": {
+    "type": "Delta",
+    "linkedServiceName": { "referenceName": "LS_ADLSGen2", "type": "LinkedServiceReference" },
+    "parameters": { "TableName": { "type": "String" } },
+    "typeProperties": {
+      "folderPath": {
+        "type": "AzureBlobFSLocation",
+        "fileSystem": "silver",
+        "folderPath": "trip-analytics/@{dataset().TableName}"
+      }
+    }
+  }
+}

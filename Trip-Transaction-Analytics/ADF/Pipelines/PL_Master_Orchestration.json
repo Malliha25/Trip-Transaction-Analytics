@@ -1,0 +1,126 @@
+{
+  "name": "PL_Master_Orchestration",
+  "type": "Microsoft.DataFactory/factories/pipelines",
+  "properties": {
+    "description": "End-to-end daily orchestration: Bronze ingestion -> Bronze-to-Silver Databricks -> Silver-to-Gold Databricks -> Data Quality Gate -> success/failure notification via Logic Apps.",
+    "activities": [
+      {
+        "name": "Incremental Bronze Load",
+        "type": "ExecutePipeline",
+        "typeProperties": {
+          "pipeline": { "referenceName": "PL_Incremental_Load", "type": "PipelineReference" },
+          "waitOnCompletion": true
+        },
+        "policy": { "retry": 1, "retryIntervalInSeconds": 120 }
+      },
+      {
+        "name": "Databricks Bronze to Silver",
+        "type": "DatabricksNotebook",
+        "dependsOn": [ { "activity": "Incremental Bronze Load", "dependencyConditions": ["Succeeded"] } ],
+        "policy": { "retry": 2, "retryIntervalInSeconds": 180, "timeout": "01:30:00" },
+        "typeProperties": {
+          "notebookPath": "/Repos/prod/trip-analytics/Databricks/01_bronze_to_silver",
+          "baseParameters": {
+            "run_id": "@{pipeline().RunId}",
+            "load_date": "@{formatDateTime(utcnow(),'yyyy-MM-dd')}"
+          }
+        },
+        "linkedServiceName": { "referenceName": "LS_Databricks", "type": "LinkedServiceReference" }
+      },
+      {
+        "name": "Databricks Data Quality Gate",
+        "type": "DatabricksNotebook",
+        "dependsOn": [ { "activity": "Databricks Bronze to Silver", "dependencyConditions": ["Succeeded"] } ],
+        "typeProperties": {
+          "notebookPath": "/Repos/prod/trip-analytics/DataQuality/dq_framework",
+          "baseParameters": { "run_id": "@{pipeline().RunId}", "layer": "Silver" }
+        },
+        "linkedServiceName": { "referenceName": "LS_Databricks", "type": "LinkedServiceReference" }
+      },
+      {
+        "name": "If Quality Score Below Threshold",
+        "type": "IfCondition",
+        "dependsOn": [ { "activity": "Databricks Data Quality Gate", "dependencyConditions": ["Succeeded"] } ],
+        "typeProperties": {
+          "expression": { "value": "@less(int(activity('Databricks Data Quality Gate').output.runOutput.overall_quality_score), 95)", "type": "Expression" },
+          "ifTrueActivities": [
+            {
+              "name": "Call Logic App - DQ Alert",
+              "type": "WebActivity",
+              "typeProperties": {
+                "url": "@pipeline().globalParameters.LogicAppAlertUrl",
+                "method": "POST",
+                "body": {
+                  "alertType": "DataQualityBelowThreshold",
+                  "pipelineName": "PL_Master_Orchestration",
+                  "runId": "@{pipeline().RunId}",
+                  "qualityScore": "@{activity('Databricks Data Quality Gate').output.runOutput.overall_quality_score}",
+                  "timestamp": "@{utcnow()}"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "Databricks Silver to Gold",
+        "type": "DatabricksNotebook",
+        "dependsOn": [ { "activity": "If Quality Score Below Threshold", "dependencyConditions": ["Succeeded"] } ],
+        "policy": { "retry": 2, "retryIntervalInSeconds": 180 },
+        "typeProperties": {
+          "notebookPath": "/Repos/prod/trip-analytics/Databricks/02_silver_to_gold",
+          "baseParameters": { "run_id": "@{pipeline().RunId}" }
+        },
+        "linkedServiceName": { "referenceName": "LS_Databricks", "type": "LinkedServiceReference" }
+      },
+      {
+        "name": "Write Master Audit Success",
+        "type": "Lookup",
+        "dependsOn": [ { "activity": "Databricks Silver to Gold", "dependencyConditions": ["Succeeded"] } ],
+        "typeProperties": {
+          "source": {
+            "type": "SqlServerSource",
+            "sqlReaderQuery": "INSERT INTO ctl.PipelineAudit (PipelineName, RunID, TriggerType, SourceTable, StartTime, EndTime, Status) VALUES ('PL_Master_Orchestration','@{pipeline().RunId}','@{pipeline().TriggerType}','ALL','@{pipeline().TriggerTime}',SYSUTCDATETIME(),'Succeeded'); SELECT 1 AS Result;"
+          },
+          "dataset": { "referenceName": "DS_Watermark_Control", "type": "DatasetReference" }
+        }
+      }
+    ],
+    "_failure_path_note": "Every top-level activity's default failure path (dependencyConditions:['Failed']) routes to 'Handle Pipeline Failure' below, which writes a Failed audit row and calls the Logic App alert webhook with the ADF error message, pipeline name and RunId.",
+    "on_failure_activities_appended_via_dependency": [
+      {
+        "name": "Handle Pipeline Failure",
+        "type": "WebActivity",
+        "dependsOn": [
+          { "activity": "Incremental Bronze Load", "dependencyConditions": ["Failed"] },
+          { "activity": "Databricks Bronze to Silver", "dependencyConditions": ["Failed"] },
+          { "activity": "Databricks Silver to Gold", "dependencyConditions": ["Failed"] }
+        ],
+        "typeProperties": {
+          "url": "@pipeline().globalParameters.LogicAppAlertUrl",
+          "method": "POST",
+          "body": {
+            "alertType": "PipelineFailure",
+            "pipelineName": "PL_Master_Orchestration",
+            "runId": "@{pipeline().RunId}",
+            "failureReason": "@{activity('Databricks Bronze to Silver').Error.message}",
+            "timestamp": "@{utcnow()}"
+          }
+        }
+      },
+      {
+        "name": "Log Failure Audit",
+        "type": "Lookup",
+        "dependsOn": [ { "activity": "Handle Pipeline Failure", "dependencyConditions": ["Completed"] } ],
+        "typeProperties": {
+          "source": {
+            "type": "SqlServerSource",
+            "sqlReaderQuery": "INSERT INTO ctl.PipelineAudit (PipelineName, RunID, TriggerType, SourceTable, StartTime, EndTime, Status, ErrorMessage) VALUES ('PL_Master_Orchestration','@{pipeline().RunId}','@{pipeline().TriggerType}','ALL','@{pipeline().TriggerTime}',SYSUTCDATETIME(),'Failed','@{activity(\"Databricks Bronze to Silver\").Error.message}'); SELECT 1 AS Result;"
+          },
+          "dataset": { "referenceName": "DS_Watermark_Control", "type": "DatasetReference" }
+        }
+      }
+    ],
+    "annotations": ["Orchestration:Daily", "Owner:DataEngineering", "Criticality:P1"]
+  }
+}

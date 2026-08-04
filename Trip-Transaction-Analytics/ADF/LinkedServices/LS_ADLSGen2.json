@@ -1,0 +1,10 @@
+{
+  "name": "LS_ADLSGen2",
+  "type": "Microsoft.DataFactory/factories/linkedservices",
+  "properties": {
+    "type": "AzureBlobFS",
+    "typeProperties": { "url": "https://sttripanalyticsprod.dfs.core.windows.net" },
+    "connectVia": { "referenceName": "AutoResolveIntegrationRuntime", "type": "IntegrationRuntimeReference" },
+    "annotations": ["ManagedIdentityAuth"]
+  }
+}

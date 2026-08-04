@@ -1,0 +1,89 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "manual": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "alertType": { "type": "string" },
+              "pipelineName": { "type": "string" },
+              "runId": { "type": "string" },
+              "failureReason": { "type": "string" },
+              "qualityScore": { "type": "string" },
+              "timestamp": { "type": "string" }
+            },
+            "required": ["alertType", "runId", "timestamp"]
+          }
+        }
+      }
+    },
+    "actions": {
+      "Condition_Is_Critical": {
+        "type": "If",
+        "expression": {
+          "or": [
+            { "equals": ["@triggerBody()?['alertType']", "PipelineFailure"] },
+            { "equals": ["@triggerBody()?['alertType']", "JobFailure"] }
+          ]
+        },
+        "actions": {
+          "Send_Critical_Email": {
+            "type": "ApiConnection",
+            "inputs": {
+              "host": { "connection": { "name": "@parameters('$connections')['office365']['connectionId']" } },
+              "method": "post",
+              "path": "/v2/Mail",
+              "body": {
+                "To": "data-eng-oncall@company.com",
+                "Subject": "[CRITICAL] @{triggerBody()?['alertType']} - @{triggerBody()?['pipelineName']}",
+                "Body": "<h3>Trip Transaction Analytics Platform Alert</h3><p>RunId: @{triggerBody()?['runId']}</p><p>Reason: @{triggerBody()?['failureReason']}</p><p>Timestamp: @{triggerBody()?['timestamp']}</p>",
+                "Importance": "High"
+              }
+            }
+          },
+          "Post_To_Teams_Channel": {
+            "type": "ApiConnection",
+            "inputs": {
+              "host": { "connection": { "name": "@parameters('$connections')['teams']['connectionId']" } },
+              "method": "post",
+              "path": "/flowbot/actions/notification/recipienttypes/channel",
+              "body": {
+                "messageBody": "🔴 @{triggerBody()?['alertType']}: @{triggerBody()?['pipelineName']} (Run @{triggerBody()?['runId']})",
+                "channelId": "19:tripanalytics-oncall@thread.tacv2"
+              }
+            }
+          }
+        },
+        "else": {
+          "actions": {
+            "Send_Quality_Warning_Email": {
+              "type": "ApiConnection",
+              "inputs": {
+                "host": { "connection": { "name": "@parameters('$connections')['office365']['connectionId']" } },
+                "method": "post",
+                "path": "/v2/Mail",
+                "body": {
+                  "To": "data-eng-oncall@company.com",
+                  "Subject": "[WARNING] Data Quality Below Threshold - @{triggerBody()?['pipelineName']}",
+                  "Body": "<p>Quality score: @{triggerBody()?['qualityScore']}% (threshold 95%)</p><p>RunId: @{triggerBody()?['runId']}</p>",
+                  "Importance": "Normal"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Response": {
+        "type": "Response",
+        "kind": "Http",
+        "inputs": { "statusCode": 200, "body": { "received": true } },
+        "runAfter": { "Condition_Is_Critical": ["Succeeded"] }
+      }
+    }
+  }
+}

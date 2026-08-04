@@ -1,0 +1,14 @@
+{
+  "name": "LS_Databricks",
+  "type": "Microsoft.DataFactory/factories/linkedservices",
+  "properties": {
+    "type": "AzureDatabricks",
+    "typeProperties": {
+      "domain": "https://adb-XXXXXXXXXXXXXXX.azuredatabricks.net",
+      "authentication": "MSI",
+      "workspaceResourceId": "/subscriptions/<sub-id>/resourceGroups/rg-tripanalytics-prod/providers/Microsoft.Databricks/workspaces/dbw-tripanalytics-prod",
+      "existingClusterId": "0804-010000-abcd1234",
+      "newClusterNodeType": null
+    }
+  }
+}

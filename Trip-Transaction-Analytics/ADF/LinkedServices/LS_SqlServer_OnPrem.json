@@ -1,0 +1,21 @@
+{
+  "name": "LS_SqlServer_OnPrem",
+  "type": "Microsoft.DataFactory/factories/linkedservices",
+  "properties": {
+    "type": "SqlServer",
+    "typeProperties": {
+      "connectionString": "Server=tcp:onprem-sql-host,1433;Database=TripOpsDB;",
+      "userName": "@{linkedService().userName}",
+      "password": {
+        "type": "AzureKeyVaultSecret",
+        "store": { "referenceName": "LS_AzureKeyVault", "type": "LinkedServiceReference" },
+        "secretName": "sql-onprem-password"
+      }
+    },
+    "connectVia": {
+      "referenceName": "SelfHostedIR-OnPrem",
+      "type": "IntegrationRuntimeReference"
+    },
+    "parameters": { "userName": { "type": "String" } }
+  }
+}

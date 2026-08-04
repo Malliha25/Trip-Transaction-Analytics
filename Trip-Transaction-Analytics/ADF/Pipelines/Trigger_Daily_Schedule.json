@@ -1,0 +1,22 @@
+{
+  "name": "TR_Daily_0100_UTC",
+  "type": "Microsoft.DataFactory/factories/triggers",
+  "properties": {
+    "type": "ScheduleTrigger",
+    "typeProperties": {
+      "recurrence": {
+        "frequency": "Day",
+        "interval": 1,
+        "startTime": "2026-08-05T01:00:00Z",
+        "timeZone": "UTC"
+      }
+    },
+    "pipelines": [
+      {
+        "pipelineReference": { "referenceName": "PL_Master_Orchestration", "type": "PipelineReference" },
+        "parameters": {}
+      }
+    ],
+    "annotations": ["Env:Prod"]
+  }
+}
